@@ -30,12 +30,12 @@ from starkware.cairo.common.uint256 import (
 )
 
 from starkware.cairo.common.math_cmp import is_le, is_not_zero, is_nn, is_in_range
-from starkware.cairo.common.cairo_keccak.keccak import keccak_uint256s
 from openzeppelin.token.ERC20.interfaces.IERC20 import IERC20
 from openzeppelin.access.ownable import Ownable
 from openzeppelin.security.pausable import Pausable
 from Libraries.DolvenMerkleVerifier import DolvenMerkleVerifier
 from openzeppelin.security.reentrancy_guard import ReentrancyGuard
+from starkware.cairo.common.hash import hash2
 
 # # Storages
 
@@ -89,6 +89,7 @@ func constructor{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_p
     let (caller_address) = get_caller_address()
     saleToken.write(_saleToken)
     Ownable.initializer(caller_address)
+    return ()
 end
 
 # #Getters
@@ -119,6 +120,7 @@ end
 func isUserWhitelisted{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}(
     leaf : felt, proof_len : felt, proof : felt*
 ) -> (res : felt):
+    alloc_locals
     let merkle_root : felt = MERKLE_ROOT.read()
     let res : felt = DolvenMerkleVerifier.verify(leaf, merkle_root, proof_len, proof)
     return (res)
@@ -128,28 +130,76 @@ end
 
 @external
 func claimTokens{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}(
-    leaf : felt, root : felt, proof_len : felt, proof : felt*
+    accounts_len : felt,
+    account : felt,
+    amounts_len,
+    amounts : felt,
+    proof_len : felt,
+    proof : felt*,
 ):
-    let merkle_root : felt = MERKLE_ROOT.read()
-    let hash : felt = keccak256()
+    alloc_locals
+    let (caller) = get_caller_address()
+    with_attr error_message("DolvenVesting::claimTokens arrays of lenght is not equal"):
+        assert accounts_len = amounts_len
+    end
+    assert_not_zero(caller)
+    let merkle_root : felt = getMerkleRoot()
+    let (leaf) = hash_user_data(account, amounts)
     let isVerified : felt = DolvenMerkleVerifier.verify(leaf, merkle_root, proof_len, proof)
-    with_attr error_message("DolvenVesting::user verification failed"):
+    with_attr error_message("DolvenVesting::claimTokens verification failed"):
         assert isVerified = 1
     end
+    let investorData_ : investorData = _investorData.read(caller)
+    let user_claim_round : felt = investorData_.claimRound
+    let round_details : roundData = _roundData.read(user_claim_round)
+    assert_not_zero(round_details.roundStartDate)
+    let (time) = get_block_timestamp()
+    let is_time_due : felt = is_le(round_details.roundStartDate, time)
+    with_attr error_message("DolvenVesting::claimTokens round is not started yet"):
+        assert is_time_due = 1
+    end
+    let amount_as_uint : Uint256 = Uint256(amounts, 0)
+    let multipler_as_uint : Uint256 = Uint256(10000000, 0)
+    let cond_one : Uint256 = uint256_mul(round_details.roundPercent, amount_as_uint)
+    let transferAmount : Uint256 = uint256_unsigned_div_rem(cond_one, multipler_as_uint)
+    let total_claimedValue : Uint256 = uint256_add(investorData_.claimedValue, transferAmount)
+    let is_amount_okay : felt = uint256_le(total_claimedValue, amount_as_uint)
+    with_attr error_message("DolvenVesting::claimTokens already you got all your tokens"):
+        assert is_amount_okay = 1
+    end
+    let _tokenAddress : felt = saleToken.read()
+    let (token_transfer_tx : felt) = IERC20.transfer(_tokenAddress, caller, transferAmount)
+    with_attr error_message("DolvenVesting::claimTokens payment failed"):
+        assert token_transfer_tx = TRUE
+    end
+    let new_user_data : investorData = investorData(
+        claimRound=investorData_.claimRound + 1, lastClaimDate=time, claimedValue=total_claimedValue
+    )
+    _investorData.write(caller, new_user_data)
+    return ()
+end
+
+@external
+func addNewClaimRound{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}(
+    _roundNumber : felt, _roundStartDate : felt, _claimPercent : Uint256
+):
+    Ownable.assert_only_owner()
+    let new_round_details : roundData = roundData(
+        roundStartDate=_roundStartDate, roundPercent=_claimPercent
+    )
+    _roundData.write(_roundNumber, new_round_details)
     return ()
 end
 
 @external
 func changePause{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}():
     Ownable.assert_only_owner()
-    ReentrancyGuard._start()
     let current_status : felt = Pausable.is_paused()
     if current_status == 1:
         Pausable._unpause()
     else:
         Pausable._pause()
     end
-    ReentrancyGuard._end()
 
     return ()
 end
@@ -181,13 +231,9 @@ func changeTotalSellAmount{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, ran
     return ()
 end
 
-@external
-func changeTotalSellAmount{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}(
-    tokenAddress : felt
-):
-    Ownable.assert_only_owner()
-    saleToken.write(tokenAddress)
-    return ()
-end
-
 # #Internal Functions
+
+func hash_user_data{pedersen_ptr : HashBuiltin*}(account : felt, amount : felt) -> (res : felt):
+    let (res) = hash2{hash_ptr=pedersen_ptr}(account, amount)
+    return (res=res)
+end
