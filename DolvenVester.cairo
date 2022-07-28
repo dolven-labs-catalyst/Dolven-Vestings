@@ -14,19 +14,18 @@ from starkware.cairo.common.math import (
     assert_not_equal,
     assert_nn_le,
     assert_le,
+    split_felt,
+    assert_lt_felt,
+    assert_le_felt,
     unsigned_div_rem,
     signed_div_rem,
 )
 from starkware.cairo.common.uint256 import (
     Uint256,
-    uint256_add,
-    uint256_sub,
     uint256_le,
     uint256_lt,
     uint256_check,
     uint256_eq,
-    uint256_mul,
-    uint256_unsigned_div_rem,
 )
 
 from starkware.cairo.common.math_cmp import is_le, is_not_zero, is_nn, is_in_range
@@ -36,6 +35,7 @@ from openzeppelin.security.pausable import Pausable
 from Libraries.DolvenMerkleVerifier import DolvenMerkleVerifier
 from openzeppelin.security.reentrancy_guard import ReentrancyGuard
 from starkware.cairo.common.hash import hash2
+from openzeppelin.security.safemath import SafeUint256
 
 # # Storages
 
@@ -56,6 +56,7 @@ func MERKLE_ROOT() -> (MERKLE_ROOT : felt):
 end
 
 # # Structs
+# NOTE::Claim percent should be multipled with 100000 while it's adding.
 
 struct roundData:
     member roundStartDate : felt
@@ -84,11 +85,10 @@ end
 
 @constructor
 func constructor{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}(
-    _saleToken : felt
+    _saleToken : felt, _admin : felt
 ):
-    let (caller_address) = get_caller_address()
     saleToken.write(_saleToken)
-    Ownable.initializer(caller_address)
+    Ownable.initializer(_admin)
     return ()
 end
 
@@ -98,6 +98,45 @@ end
 func _isPaused{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}() -> (res : felt):
     let (status) = Pausable.is_paused()
     return (status)
+end
+
+@view
+func get_totalClaimedValue{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}() -> (
+    res : felt
+):
+    let tcv : Uint256 = totalClaimedValue.read()
+    return (tcv)
+end
+
+@view
+func get_totalSellAmountToken{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}(
+    ) -> (res : felt):
+    let res : Uint256 = totalSellAmountToken.read()
+    return (res)
+end
+
+@view
+func get_saleToken{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}() -> (
+    res : felt
+):
+    let token_address : felt = saleToken.read()
+    return (token_address)
+end
+
+@view
+func get_roundDetails{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}(
+    round_index : felt
+) -> (res : roundData):
+    let round_details : roundData = _roundData.read(round_index)
+    return (round_details)
+end
+
+@view
+func get_userDetails{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}(
+    user_address : felt
+) -> (res : investorData):
+    let user_details : investorData = _investorData.read(user_address)
+    return (user_details)
 end
 
 @view
@@ -130,21 +169,14 @@ end
 
 @external
 func claimTokens{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}(
-    accounts_len : felt,
-    account : felt,
-    amounts_len,
-    amounts : felt,
-    proof_len : felt,
-    proof : felt*,
+    amounts : felt, proof_len : felt, proof : felt*
 ):
     alloc_locals
     let (caller) = get_caller_address()
-    with_attr error_message("DolvenVesting::claimTokens arrays of lenght is not equal"):
-        assert accounts_len = amounts_len
-    end
+    Pausable.assert_not_paused()
     assert_not_zero(caller)
     let merkle_root : felt = getMerkleRoot()
-    let (leaf) = hash_user_data(account, amounts)
+    let (leaf) = hash_user_data(caller, amounts)
     let isVerified : felt = DolvenMerkleVerifier.verify(leaf, merkle_root, proof_len, proof)
     with_attr error_message("DolvenVesting::claimTokens verification failed"):
         assert isVerified = 1
@@ -158,11 +190,12 @@ func claimTokens{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_p
     with_attr error_message("DolvenVesting::claimTokens round is not started yet"):
         assert is_time_due = 1
     end
-    let amount_as_uint : Uint256 = Uint256(amounts, 0)
+
+    let amount_as_uint : Uint256 = felt_to_uint256(amounts)
     let multipler_as_uint : Uint256 = Uint256(10000000, 0)
-    let cond_one : Uint256 = uint256_mul(round_details.roundPercent, amount_as_uint)
-    let transferAmount : Uint256 = uint256_unsigned_div_rem(cond_one, multipler_as_uint)
-    let total_claimedValue : Uint256 = uint256_add(investorData_.claimedValue, transferAmount)
+    let cond_one : Uint256 = SafeUint256.mul(round_details.roundPercent, amount_as_uint)
+    let (local transferAmount : Uint256, _) = SafeUint256.div_rem(cond_one, multipler_as_uint)
+    let total_claimedValue : Uint256 = SafeUint256.add(investorData_.claimedValue, transferAmount)
     let is_amount_okay : felt = uint256_le(total_claimedValue, amount_as_uint)
     with_attr error_message("DolvenVesting::claimTokens already you got all your tokens"):
         assert is_amount_okay = 1
@@ -212,6 +245,15 @@ func setMerkleRoot{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check
 end
 
 @external
+func setSaleToken{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}(
+    tokenAddress : felt
+):
+    Ownable.assert_only_owner()
+    saleToken.write(tokenAddress)
+    return ()
+end
+
+@external
 func withdrawTokens{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}():
     Ownable.assert_only_owner()
     let (this) = get_contract_address()
@@ -236,4 +278,14 @@ end
 func hash_user_data{pedersen_ptr : HashBuiltin*}(account : felt, amount : felt) -> (res : felt):
     let (res) = hash2{hash_ptr=pedersen_ptr}(account, amount)
     return (res=res)
+end
+
+func felt_to_uint256{range_check_ptr}(x) -> (uint_x : Uint256):
+    let (high, low) = split_felt(x)
+    return (Uint256(low=low, high=high))
+end
+
+func uint256_to_felt{range_check_ptr}(value : Uint256) -> (value : felt):
+    assert_lt_felt(value.high, 2 ** 123)
+    return (value.high * (2 ** 128) + value.low)
 end
