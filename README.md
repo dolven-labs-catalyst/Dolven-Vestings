@@ -14,9 +14,9 @@
 
 Dolven Labs is a DAO Based Ecosystem Catalyst for projects built on the StarkNet Network, Dolven Labs aims to be the future of investing, deal flow, and value creation in the StarkNet Ecosystem. With this contract, you will be able to lock your tokens and liquidity for the dates you choose. Also, anyone can use it.
 
-## Dolven Strategy
+## Dolven Distributor
 
-These strategy contracts are the vaults of Dolven Labs. More technical details will be available on our notion soon.
+This is the Airdrop distributor contract of Dolven Labs which allows to claiming tokens of incubated projects. More technical details will be available on our notion soon.
 
 ## To Do List
 
