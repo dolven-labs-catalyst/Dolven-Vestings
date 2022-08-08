@@ -20,7 +20,11 @@ This is the Airdrop distributor contract of Dolven Labs which allows to claiming
 
 ## To Do List
 
-- [x] All Good
+- [x] Reentrancy Check
+- [x] Total Claimed Value Check
+- [x] Merkle Tree tests
+- [x] Pedersen Hash Function Check
+
 
 # Basic Sample Hardhat Project - with Starknet Plugin
 
