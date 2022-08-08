@@ -48,7 +48,7 @@ func totalSellAmountToken() -> (totalSellAmountToken : Uint256):
 end
 
 @storage_var
-func totalClaimedValue() -> (totalClaimedValue : felt):
+func totalClaimedValue() -> (totalClaimedValue : Uint256):
 end
 
 @storage_var
@@ -172,6 +172,7 @@ func claimTokens{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_p
     amounts : felt, proof_len : felt, proof : felt*, random_value : felt
 ):
     alloc_locals
+    ReentrancyGuard._start()
     let (caller) = get_caller_address()
     Pausable.assert_not_paused()
     assert_not_zero(caller)
@@ -196,6 +197,18 @@ func claimTokens{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_p
     let cond_one : Uint256 = SafeUint256.mul(round_details.roundPercent, amount_as_uint)
     let (local transferAmount : Uint256, _) = SafeUint256.div_rem(cond_one, multipler_as_uint)
     let total_claimedValue : Uint256 = SafeUint256.add(investorData_.claimedValue, transferAmount)
+
+    let total_entireClaimedValue : Uint256 = totalClaimedValue.read()
+    let new_totalClaimedValue : Uint256 = SafeUint256.add(total_entireClaimedValue, transferAmount)
+
+    let total_sell_amount_token : Uint256 = totalSellAmountToken.read()
+    let is_total_claimed_less_than_max : felt = uint256_le(
+        total_entireClaimedValue, total_sell_amount_token
+    )
+    with_attr error_message("DolvenVesting::claimTokens all tokens distributed"):
+        assert is_total_claimed_less_than_max = 1
+    end
+
     let is_amount_okay : felt = uint256_le(total_claimedValue, amount_as_uint)
     with_attr error_message("DolvenVesting::claimTokens already you got all your tokens"):
         assert is_amount_okay = 1
@@ -209,6 +222,8 @@ func claimTokens{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_p
         claimRound=investorData_.claimRound + 1, lastClaimDate=time, claimedValue=total_claimedValue
     )
     _investorData.write(caller, new_user_data)
+    totalClaimedValue.write(new_totalClaimedValue)
+    ReentrancyGuard._end()
     return ()
 end
 
