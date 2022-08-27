@@ -31,3 +31,4 @@ async def test_merkle(capsys):
     
     with open('values.json', 'w') as file:
         json.dump(array_leaves, file)
+ 
