@@ -203,7 +203,7 @@ func claimTokens{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_p
 
     let total_sell_amount_token : Uint256 = totalSellAmountToken.read()
     let is_total_claimed_less_than_max : felt = uint256_le(
-        total_entireClaimedValue, total_sell_amount_token
+        new_totalClaimedValue, total_sell_amount_token
     )
     with_attr error_message("DolvenVesting::claimTokens all tokens distributed"):
         assert is_total_claimed_less_than_max = 1
